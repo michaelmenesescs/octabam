@@ -7,6 +7,14 @@ flashed image was built from.
 
 ## Unreleased (main after image 43; image 53 built)
 
+- SCENES P2's page-2 editor-entry detours displace eight bytes, the span
+  Octakit's own entry write takes (28 Sep 2026): at twelve the build
+  nopped the stock slot load at entry+8, where her trampoline continues,
+  and every page-2 knob turn under Octakit + SCENES P2 (rig-kits,
+  bottleservice) halted in `gk_track_setup_byte_fatal`. Measured under
+  the port from the panel; never flashed. `verify_modedefaults` and
+  `verify_scenesp2` no longer SKIP under Octakit
+  (`docs/remixer/FAILURE_MODES.md`).
 - The gate run, once each (28 Sep 2026): `make accept REMIXES="a b c"`
   runs the remix-independent half of `make check` once and `make
   check-remix` per remix (report v2: gates `check_shared` and
