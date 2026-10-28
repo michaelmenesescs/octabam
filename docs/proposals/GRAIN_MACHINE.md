@@ -41,22 +41,47 @@ the slot's LOOP to ON; with it the cloud runs until the AMP envelope ends it.
 ## Reading the sample at any position
 
 Grains need random access, the stock streamer is sequential. The pool page
-walk does exactly this for the sample-save path:
+walk does exactly this for the sample-save path. Read from the 1.40C image
+(zip SHA-256 `370c55a3…3ff0`, the repo's pinned copy), 27 Oct 2026:
 
-- 🟡 `0x4009499c(slotId, position, 1)` → `d0` pointer, `d1` contiguous run
-  at that frame (`docs/firmware/SAMPLE_SAVE.md` §4; two callers; branches on
-  recorder slots 128–135).
-- 🟡 Pool: 6,144-byte blocks from `0x40A955E0`, 6 B per 24-bit stereo frame
-  in recorder buffers (`RECORDER.md` §2). Whether FLEX slots loaded from a
-  16-bit file are packed 4 B or 6 B per frame is **unknown** — the save path's
-  16/24-bit converter switch (`0x40021042`) suggests both exist.
-- The settings record (`0x100b14f0 + 0x448·slot`) and the voice struct's
-  `+4/+8` give the slot; `+40` holds the trim region (`COLDFIRE_PORT.md`).
+- ✅ **`0x4009459c(slot, position, dir)`** → `d0` pointer to the frame,
+  `d1` frames contiguous from it. (`SAMPLE_SAVE.md` §4 names it
+  `0x4009499c`; that address is mid-function, inside its caller. Doc
+  correction pending.) C convention, `d2-d6/a2` saved. `dir < 0` walks
+  backwards.
+- ✅ It is pure arithmetic: the slot record lookup `0x400942d8(1, slot)`
+  (FLEX/PICKUP → `0x46c922c4 + 44·slot`, refused until `0x46105408` is
+  set), two `remul`, one halfword from the slot's block list
+  (`[0x80006918][slot]` → index into the u16 array at `[0x80006914]`), and
+  `block·6144 + offset·bytes_per_frame + 0x40a955e0`. No lock, no SR
+  change, no call that can block. Recorder slots 128–135 take one extra
+  call (`0x40004268` / `0x40005f54`) that GRAIN never reaches.
+- ✅ Out of range (`pos < 0` or `pos ≥ length`, length at slot record
+  `+16`) returns the pool base with run 0: a grain must clamp, never trust
+  a zero run as data.
+- ✅ The per-format table (`0x80003c20`, 16-byte records, indexed by slot
+  record `+0`; its initialised copy is at `0x4010bf04` in the image):
 
-**Risk to measure first:** whether the page walk is safe and cheap in the
-frame interrupt (a mutex, a cache miss chain, a long walk on a fragmented
-pool). The design calls it once per grain chunk, not per sample, and caches
-`(pointer, run)` per grain; a grain crossing a run boundary re-walks.
+  | fmt | layout | bytes/frame | frames/block | reciprocal (2³¹/fpb) |
+  |---|---|---|---|---|
+  | 1 | 24-bit mono | 3 | 2048 | `0x100000` |
+  | 2 | 24-bit stereo | 6 | 1024 | `0x200000` |
+  | 3 | 16-bit mono | 2 | 3072 | `0xaaaab` |
+  | 4 | 16-bit stereo | 4 | 1536 | `0x155556` |
+
+  So FLEX samples keep their file's depth and channel count: four
+  unpackers.
+- 🟡 Byte order: the 24-bit packer at `0x40097d1c` writes the top 24 bits
+  of a long, high byte first, so stored samples are big-endian. Inferred
+  from one routine; confirmed only when a known sample is read back under
+  the port.
+- The voice struct's `+4/+8` give the slot's state and settings records;
+  `+40` holds the trim region (`COLDFIRE_PORT.md`).
+
+**Cost:** ~40 instructions and two divides per walk, so once per grain per
+frame (16 samples) is cheap; a grain crossing a block boundary re-walks.
+The one remaining open item is the byte order, which needs a real project
+with a known sample under the port (the repo ships no project fixture).
 
 ## The engine
 
@@ -103,7 +128,7 @@ four tracks playable.
 
 ## Plan
 
-0. **Measure** (port, no hardware): page walk from the frame interrupt —
+0. **Measure** (port, no hardware). Static half done 27 Oct 2026 (above): the walk is lock-free and its formats are known. Left:
    pointer, run, cost, and the FLEX frame packing for a 16-bit and a 24-bit
    file. Go/no-go for random access.
 1. **Mono grain, fixed window, POS/SIZE only.** `make check` + an emulator
